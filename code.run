@@ -1,0 +1,104 @@
+#include <Wire.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+#include <Fonts/FreeSerif9pt7b.h>
+#include "MAX30100_PulseOximeter.h"
+
+#define REPORTING_PERIOD_MS     1000
+
+Adafruit_SSD1306 display(128, 64, &Wire, -1);
+PulseOximeter pox;
+
+uint32_t tsLastReport = 0;
+uint32_t tsLastBeat = 0; 
+float smoothedBPM = 0;
+
+void onBeatDetected(){
+    tsLastBeat = millis();
+}
+
+void setup(){
+    Serial.begin(115200);
+    Wire.begin();
+    Wire.setClock(400000);
+
+    if(!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {  
+      for(;;);
+    }
+    
+    // Setup giao diện
+    display.setFont(&FreeSerif9pt7b);
+    display.clearDisplay();
+    display.setTextColor(WHITE);        
+    display.setCursor(20,15);             
+    display.println("Welcom to");
+    display.setCursor(0,40);             
+    display.println("DTM E-SMART");
+    display.display();
+    delay(2000); 
+
+    if (!pox.begin()) {
+        for(;;);
+    }
+    
+    pox.setIRLedCurrent(MAX30100_LED_CURR_7_6MA);
+    pox.setOnBeatDetectedCallback(onBeatDetected);
+}
+
+void loop(){
+    pox.update();
+
+    if (millis() - tsLastReport > REPORTING_PERIOD_MS) {
+        float rawBPM = pox.getHeartRate();
+        int rawSpO2 = pox.getSpO2();
+
+        // --- LOGIC "BIỆN PHÁP MẠNH" ---
+        
+        // Điều kiện 1: Nếu quá 3 giây không có nhịp
+        bool noFingerTime = (millis() - tsLastBeat > 3000);
+        
+        // Điều kiện 2: SpO2 quá thấp (Dưới 90% thường là do nhiễu hoặc không có tay)
+        // Lưu ý: Nếu bạn nín thở lâu SpO2 có thể tụt, nhưng thường khó dưới 90 khi đo chơi
+        bool lowSpO2 = (rawSpO2 < 90);
+
+        if (noFingerTime || lowSpO2) {
+            // Cưỡng chế về 0
+            smoothedBPM = 0;
+            rawSpO2 = 0; // Ép SpO2 về 0 luôn cho màn hình sạch
+        } 
+        else {
+            // Chỉ khi SpO2 >= 90 và có nhịp tim thì mới tính toán
+            if (smoothedBPM == 0) {
+                smoothedBPM = rawBPM;
+            } else {
+                smoothedBPM = (smoothedBPM * 0.7) + (rawBPM * 0.3);
+            }
+        }
+        // -----------------------------
+
+        display.clearDisplay(); 
+        display.setFont(&FreeSerif9pt7b);
+        
+        display.setCursor(10,12); 
+        display.print("Pulse Oximeter");     
+        
+        display.setCursor(0,35); 
+        display.print("HeartR:");
+        display.setCursor(62,35);
+        display.print((int)smoothedBPM); 
+        display.println(" bpm");
+        
+        display.setCursor(0,59);
+        display.print("SpO2  : ");
+        display.setCursor(62,59);
+        display.print(rawSpO2);
+        display.println(" %");
+        
+        display.display();
+
+        Serial.print("BPM:"); Serial.print(smoothedBPM);
+        Serial.print(" SpO2:"); Serial.println(rawSpO2);
+
+        tsLastReport = millis();
+    }
+}
